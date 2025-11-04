@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/-bin/env python3
 
 import argparse
 import glob
@@ -19,8 +19,14 @@ parser.add_argument("--wav_dir", type=str)
 parser.add_argument("--wav_scp", type=str)
 parser.add_argument("--output", type=str)
 
-# Decode Options
-parser.add_argument('--use_gpu', type=int, default=1)
+# Model Configuration
+parser.add_argument('--asr_device', type=str, default="cuda:0", help="Device for AED model or the ASR part of the LLM model.")
+parser.add_argument('--llm_device', type=str, default="cuda:1", help="Device for the LLM part. Can be 'cpu', 'cuda:1', etc.")
+parser.add_argument('--llm_dtype', type=str, default="fp16", choices=["fp32", "fp16", "bf16"], help="Data type for LLM inference (float32, float16, bfloat16).")
+parser.add_argument('--use_flash_attn', type=int, default=1, choices=[0, 1], help="Whether to use flash attention 2 for the LLM (1 for True, 0 for False).")
+parser.add_argument('--use_gpu', type=int, default=1, help="Global GPU switch for AED mode if asr_device is not specified.")
+
+# Inference Parameters
 parser.add_argument("--batch_size", type=int, default=1)
 parser.add_argument("--beam_size", type=int, default=1)
 parser.add_argument("--decode_max_len", type=int, default=0)
@@ -40,7 +46,16 @@ def main(args):
     wavs = get_wav_info(args)
     fout = open(args.output, "w") if args.output else None
 
-    model = FireRedAsr.from_pretrained(args.asr_type, args.model_dir)
+    # 1. 初始化时传入模型配置参数
+    model = FireRedAsr.from_pretrained(
+        asr_type=args.asr_type,
+        model_dir=args.model_dir,
+        asr_device=args.asr_device,
+        llm_device=args.llm_device,
+        llm_dtype=args.llm_dtype,
+        use_flash_attn=bool(args.use_flash_attn), # <-- 传递新参数
+        use_gpu=bool(args.use_gpu)
+    )
 
     batch_uttid = []
     batch_wav_path = []
@@ -51,22 +66,11 @@ def main(args):
         if len(batch_wav_path) < args.batch_size and i != len(wavs) - 1:
             continue
 
+        # 2. 推理时传入解码参数
         results = model.transcribe(
             batch_uttid,
             batch_wav_path,
-            {
-            "use_gpu": args.use_gpu,
-            "beam_size": args.beam_size,
-            "nbest": args.nbest,
-            "decode_max_len": args.decode_max_len,
-            "softmax_smoothing": args.softmax_smoothing,
-            "aed_length_penalty": args.aed_length_penalty,
-            "eos_penalty": args.eos_penalty,
-            "decode_min_len": args.decode_min_len,
-            "repetition_penalty": args.repetition_penalty,
-            "llm_length_penalty": args.llm_length_penalty,
-            "temperature": args.temperature
-            }
+            **vars(args)
         )
 
         for result in results:
