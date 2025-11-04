@@ -74,7 +74,8 @@ FireRedASR-MultiGPU.code-workspace
 **/*test*/
 **/test_*
 
-# 忽略指定的markdown文档
+# 忽略指定的文档
+Prompt.txt
 
 # 忽略所有数据库文件
 *.db
