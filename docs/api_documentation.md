@@ -1,10 +1,12 @@
 # FireRedASR API 完整文档
 
-**版本: 1.1.0**
+**版本: 1.3.1**
 
 ## 概述
 
 本文档详细说明了如何使用 FireRedASR API 来进行高精度的语音识别。该API服务提供了一个统一的端点，支持处理单个或批量的音频文件，并允许对底层ASR模型及解码参数进行全面、灵活的配置。
+
+服务器端对模型路径进行了统一管理，调用者只需通过 `asr_type` 参数选择 `aed` 或 `llm` 模型，无需关心其物理存储位置。
 
 ## 端点: `POST /transcribe/`
 
@@ -38,14 +40,13 @@
 
 这些参数决定了后端加载哪个模型以及如何配置它。当这些参数发生变化时，服务器会自动重新加载模型。
 
-| 参数             | 类型    | 默认值                              | 描述                                                                    |
-| :--------------- | :------ | :---------------------------------- | :---------------------------------------------------------------------- |
-| `asr_type`       | 字符串  | `llm`                               | 模型架构。必须是 `aed` 或 `llm` 之一。                                  |
-| `model_dir`      | 字符串  | `pretrained_models/FireRedASR-LLM-L`| 包含预训练模型文件的目录路径。                                          |
-| `asr_device`     | 字符串  | `cuda:0`                            | ASR编码器所用的设备 (例如 `cuda:0`, `cpu`)。                            |
-| `llm_device`     | 字符串  | `cuda:1`                            | LLM部分所用的设备 (例如 `cuda:1`, `cpu`)。仅在 `asr_type=llm` 时使用。 |
-| `llm_dtype`      | 字符串  | `bf16`                              | LLM推理时的数据类型 (`fp32`, `fp16`, `bf16`)。                           |
-| `use_flash_attn` | 布尔值  | `false`                             | 设置为 `true` 以启用LLM的 Flash Attention 2。                           |
+| 参数             | 类型    | 默认值   | 可选值                          | 描述                                                                    |
+| :--------------- | :------ | :------- | :------------------------------ | :---------------------------------------------------------------------- |
+| `asr_type`       | 字符串  | `llm`    | `aed`, `llm`                    | 模型架构。                                                              |
+| `asr_device`     | 字符串  | `cuda:0` | -                               | ASR编码器所用的设备 (例如 `cuda:0`, `cpu`)。                            |
+| `llm_device`     | 字符串  | `cuda:1` | -                               | LLM部分所用的设备 (例如 `cuda:1`, `cpu`)。仅在 `asr_type=llm` 时使用。 |
+| `llm_dtype`      | 字符串  | `bf16`   | `fp32`, `fp16`, `bf16`          | LLM推理时的数据类型。                                                   |
+| `use_flash_attn` | 布尔值  | `false`  | `true`, `false`                 | 设置为 `true` 以启用LLM的 Flash Attention 2。                           |
 
 #### **转录参数**
 
@@ -96,8 +97,9 @@ API会返回一个JSON数组，其中每个对象对应一个已转录的音频�
 
 #### **错误响应**
 
--   **`400 Bad Request`**: 如果请求中既未提供 `files` 也未提供 `paths`，则返回此错误。
+-   **`400 Bad Request`**: 如果请求中既未提供 `files` 也未提供 `paths`，或服务器未配置请求的 `asr_type`，则返回此错误。
 -   **`422 Unprocessable Entity`**: 如果任何表单参数未能通过验证（例如，`asr_type` 不是 `aed` 或 `llm`，或 `batch_size` 不是正整数），则返回此错误。响应体中将包含详细的验证错误信息。
+-   **`500 Internal Server Error`**: 如果服务器端配置的模型路径不存在，则返回此错误。
 
 ---
 
@@ -121,7 +123,7 @@ curl -X POST "http://127.0.0.1:8000/transcribe/" \
 import requests
 
 # API的URL
-url = "http://127.0.0.1:8000/transcribe/"
+url = "http://12.0.0.1:8000/transcribe/"
 
 # 要上传的音频文件路径
 file_path = "/data/my_audio/meeting_part_1.wav"
@@ -150,12 +152,12 @@ else:
 ```bash
 # 多次使用 -F "files=@..." 来上传多个文件
 # 同时通过 -F 传递其他自定义参数
+# 注意：不再需要传递 model_dir
 curl -X POST "http://127.0.0.1:8000/transcribe/" \
   -H "accept: application/json" \
   -F "files=@/audios/chunk_001.wav" \
   -F "files=@/audios/chunk_002.wav" \
   -F "asr_type=aed" \
-  -F "model_dir=pretrained_models/FireRedASR-AED-L" \
   -F "batch_size=2" \
   -F "beam_size=5" \
   -F "aed_length_penalty=0.8"
@@ -177,9 +179,9 @@ files_list = [
 ]
 
 # 准备其他表单参数
+# 注意：不再需要传递 model_dir
 payload = {
     'asr_type': 'aed',
-    'model_dir': 'pretrained_models/FireRedASR-AED-L',
     'batch_size': 2,
     'beam_size': 5,
     'aed_length_penalty': 0.8
