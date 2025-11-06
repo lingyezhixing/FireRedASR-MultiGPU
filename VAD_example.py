@@ -76,7 +76,6 @@ class AudioSplitter:
             if 'temp_filepath' in locals() and os.path.exists(temp_filepath): os.remove(temp_filepath)
             return (filepath, False, str(e))
 
-    # ... (其他内部方法 _read_audio, _get_full_timeline, _force_split_segment 保持不变)
     @staticmethod
     def _read_audio(path: str, sampling_rate: int = 16000):
         if not os.path.exists(path): raise FileNotFoundError(f"音频文件不存在: {path}")
