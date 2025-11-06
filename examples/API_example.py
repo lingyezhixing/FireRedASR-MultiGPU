@@ -5,7 +5,7 @@ import time
 
 # --- 配置 ---
 API_URL = "http://127.0.0.1:8000"
-TRANScribe_URL = API_URL + "/transcribe/"
+TRANScribe_URL = API_URL + "/transcribe/FireRedASR"
 HEALTH_URL = API_URL + "/health"
 AUDIO_FILE_PATH = r"D:\voice-translation\FireRedASR-MultiGPU\audio_split_output_vad\gaowanying_chunk_0001.wav"
 
