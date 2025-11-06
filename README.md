@@ -1,4 +1,3 @@
-```markdown
 <div align="center">
 <h1>FireRedASR：开源工业级自动语音识别模型</h1>
 </div>
