@@ -2,6 +2,7 @@ import os
 import time
 
 import torch
+from tqdm import tqdm
 
 from fireredasr.data.asr_feat import ASRFeatExtractor
 from fireredasr.models.fireredasr_aed import FireRedAsrAed
@@ -59,62 +60,83 @@ class FireRedAsr:
         self.tokenizer = tokenizer
 
     @torch.no_grad()
-    def transcribe(self, batch_uttid, batch_wav_path, **kwargs):
-        feats, lengths, durs = self.feat_extractor(batch_wav_path)
-        total_dur = sum(durs)
+    def transcribe(self, all_wav_paths, batch_size=1, **kwargs):
+        all_results = []
+        # 使用tqdm创建进度条，并按batch_size对所有文件进行分批处理
+        for i in tqdm(range(0, len(all_wav_paths), batch_size), desc="Transcribing"):
+            batch_wav_path = all_wav_paths[i:i + batch_size]
+            
+            # --- 原有的处理逻辑，现在作用于每个小的批次 ---
+            feats, lengths, durs = self.feat_extractor(batch_wav_path)
+            total_dur = sum(durs)
 
-        if self.asr_type == "aed":
-            device = next(self.model.parameters()).device
-            feats, lengths = feats.to(device), lengths.to(device)
+            if self.asr_type == "aed":
+                device = next(self.model.parameters()).device
+                feats, lengths = feats.to(device), lengths.to(device)
 
-        start_time = time.time()
-        if self.asr_type == "aed":
-            hyps = self.model.transcribe(
-                feats, lengths,
-                beam_size=kwargs.get("beam_size", 1),
-                nbest=kwargs.get("nbest", 1),
-                decode_max_len=kwargs.get("decode_max_len", 0),
-                softmax_smoothing=kwargs.get("softmax_smoothing", 1.0),
-                aed_length_penalty=kwargs.get("aed_length_penalty", 0.0),
-                eos_penalty=kwargs.get("eos_penalty", 1.0)
-            )
-            elapsed = time.time() - start_time
-            rtf = elapsed / total_dur if total_dur > 0 else 0
+            start_time = time.time()
+            if self.asr_type == "aed":
+                hyps = self.model.transcribe(
+                    feats, lengths,
+                    beam_size=kwargs.get("beam_size", 1),
+                    nbest=kwargs.get("nbest", 1),
+                    decode_max_len=kwargs.get("decode_max_len", 0),
+                    softmax_smoothing=kwargs.get("softmax_smoothing", 1.0),
+                    length_penalty=kwargs.get("aed_length_penalty", 0.0),
+                    eos_penalty=kwargs.get("eos_penalty", 1.0)
+                )
+                elapsed = time.time() - start_time
+                rtf = elapsed / total_dur if total_dur > 0 else 0
 
-            results = []
-            for uttid, wav, hyp in zip(batch_uttid, batch_wav_path, hyps):
-                hyp = hyp[0]
-                hyp_ids = [int(id) for id in hyp["yseq"].cpu()]
-                text = self.tokenizer.detokenize(hyp_ids)
-                results.append({"uttid": uttid, "text": text, "wav": wav, "rtf": f"{rtf:.4f}"})
-            return results
+                results = []
+                for wav, hyp in zip(batch_wav_path, hyps):
+                    uttid = os.path.splitext(os.path.basename(wav))[0]
+                    output_txt_path = os.path.splitext(wav)[0] + ".txt"
+                    
+                    hyp = hyp[0]
+                    hyp_ids = [int(id) for id in hyp["yseq"].cpu()]
+                    text = self.tokenizer.detokenize(hyp_ids)
+                    
+                    with open(output_txt_path, "w", encoding="utf-8") as f:
+                        f.write(text)
 
-        elif self.asr_type == "llm":
-            input_ids, attention_mask, _, _ = \
-                LlmTokenizerWrapper.preprocess_texts(
-                    origin_texts=[""] * feats.size(0), tokenizer=self.tokenizer,
-                    max_len=128, decode=True)
+                    results.append({"uttid": uttid, "text": text, "wav": wav, "rtf": f"{rtf:.4f}"})
+                all_results.extend(results)
 
-            generated_ids = self.model.transcribe(
-                padded_feat=feats,
-                feat_lengths=lengths,
-                padded_input_ids=input_ids,
-                attention_mask=attention_mask,
-                beam_size=kwargs.get("beam_size", 1),
-                decode_max_len=kwargs.get("decode_max_len", 0),
-                decode_min_len=kwargs.get("decode_min_len", 0),
-                repetition_penalty=kwargs.get("repetition_penalty", 1.0),
-                llm_length_penalty=kwargs.get("llm_length_penalty", 0.0),
-                temperature=kwargs.get("temperature", 1.0)
-            )
-            elapsed = time.time() - start_time
-            rtf = elapsed / total_dur if total_dur > 0 else 0
-            texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+            elif self.asr_type == "llm":
+                input_ids, attention_mask, _, _ = \
+                    LlmTokenizerWrapper.preprocess_texts(
+                        origin_texts=[""] * feats.size(0), tokenizer=self.tokenizer,
+                        max_len=128, decode=True)
 
-            results = []
-            for uttid, wav, text in zip(batch_uttid, batch_wav_path, texts):
-                results.append({"uttid": uttid, "text": text, "wav": wav, "rtf": f"{rtf:.4f}"})
-            return results
+                generated_ids = self.model.transcribe(
+                    padded_feat=feats,
+                    feat_lengths=lengths,
+                    padded_input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    beam_size=kwargs.get("beam_size", 1),
+                    decode_max_len=kwargs.get("decode_max_len", 0),
+                    decode_min_len=kwargs.get("decode_min_len", 0),
+                    repetition_penalty=kwargs.get("repetition_penalty", 1.0),
+                    llm_length_penalty=kwargs.get("llm_length_penalty", 0.0),
+                    temperature=kwargs.get("temperature", 1.0)
+                )
+                elapsed = time.time() - start_time
+                rtf = elapsed / total_dur if total_dur > 0 else 0
+                texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+
+                results = []
+                for wav, text in zip(batch_wav_path, texts):
+                    uttid = os.path.splitext(os.path.basename(wav))[0]
+                    output_txt_path = os.path.splitext(wav)[0] + ".txt"
+
+                    with open(output_txt_path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    
+                    results.append({"uttid": uttid, "text": text, "wav": wav, "rtf": f"{rtf:.4f}"})
+                all_results.extend(results)
+        
+        return all_results
 
 
 def load_fireredasr_aed_model(model_path):

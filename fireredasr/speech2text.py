@@ -27,7 +27,7 @@ parser.add_argument('--use_flash_attn', type=int, default=1, choices=[0, 1], hel
 parser.add_argument('--use_gpu', type=int, default=1, help="Global GPU switch for AED mode if asr_device is not specified.")
 
 # Inference Parameters
-parser.add_argument("--batch_size", type=int, default=1)
+parser.add_argument("--batch_size", type=int, default=1, help="Number of audio files to process in parallel during model inference.")
 parser.add_argument("--beam_size", type=int, default=1)
 parser.add_argument("--decode_max_len", type=int, default=0)
 # FireRedASR-AED
@@ -53,33 +53,26 @@ def main(args):
         asr_device=args.asr_device,
         llm_device=args.llm_device,
         llm_dtype=args.llm_dtype,
-        use_flash_attn=bool(args.use_flash_attn), # <-- 传递新参数
+        use_flash_attn=bool(args.use_flash_attn),
         use_gpu=bool(args.use_gpu)
     )
 
-    batch_uttid = []
-    batch_wav_path = []
-    for i, wav in enumerate(wavs):
-        uttid, wav_path = wav
-        batch_uttid.append(uttid)
-        batch_wav_path.append(wav_path)
-        if len(batch_wav_path) < args.batch_size and i != len(wavs) - 1:
-            continue
+    # 提取所有音频文件的路径
+    all_wav_paths = [wav_info[1] for wav_info in wavs]
 
-        # 2. 推理时传入解码参数
-        results = model.transcribe(
-            batch_uttid,
-            batch_wav_path,
-            **vars(args)
-        )
+    # 2. 一次性调用transcribe处理所有文件
+    # 内部会根据batch_size自动分批并显示进度条
+    results = model.transcribe(
+        all_wav_paths,
+        batch_size=args.batch_size,
+        **vars(args)
+    )
 
-        for result in results:
-            print(result)
-            if fout is not None:
-                fout.write(f"{result['uttid']}\t{result['text']}\n")
-
-        batch_uttid = []
-        batch_wav_path = []
+    # 3. 处理所有返回的结果
+    for result in results:
+        print(result)
+        if fout is not None:
+            fout.write(f"{result['uttid']}\t{result['text']}\n")
 
 
 def get_wav_info(args):
@@ -87,13 +80,13 @@ def get_wav_info(args):
     Returns:
         wavs: list of (uttid, wav_path)
     """
-    base = lambda p: os.path.basename(p).replace(".wav", "")
+    base = lambda p: os.path.splitext(os.path.basename(p))[0]
     if args.wav_path:
         wavs = [(base(args.wav_path), args.wav_path)]
     elif args.wav_paths and len(args.wav_paths) >= 1:
         wavs = [(base(p), p) for p in sorted(args.wav_paths)]
     elif args.wav_scp:
-        wavs = [line.strip().split() for line in open(args.wav_scp)]
+        wavs = [line.strip().split(maxsplit=1) for line in open(args.wav_scp)]
     elif args.wav_dir:
         wavs = glob.glob(f"{args.wav_dir}/**/*.wav", recursive=True)
         wavs = [(base(p), p) for p in sorted(wavs)]

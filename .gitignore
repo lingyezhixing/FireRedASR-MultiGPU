@@ -74,8 +74,10 @@ FireRedASR-MultiGPU.code-workspace
 **/*test*/
 **/test_*
 
-# 忽略指定的文档
+# 忽略指定的文档和文件夹
 Prompt.txt
+audio_split_output_vad/
+gaowanying.wav
 
 # 忽略所有数据库文件
 *.db
