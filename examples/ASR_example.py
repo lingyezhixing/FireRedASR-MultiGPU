@@ -1,7 +1,7 @@
 from fireredasr.models.fireredasr import FireRedAsr
 
 all_wav_paths = [
-    r"audio_split_output_vad\gaowanying_chunk_0001.wav",
+    r"audio.wav",
 ]
 
 # FireRedASR-AED

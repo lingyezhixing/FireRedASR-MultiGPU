@@ -214,7 +214,7 @@ if __name__ == "__main__":
     print("="*50)
 
     # 确保演示文件存在，如果不存在则创建一个假的
-    audio_file_to_process = r"gaowanying.wav"
+    audio_file_to_process = r"audio.wav"
     if not os.path.exists(audio_file_to_process):
         print(f"警告: 演示音频 '{audio_file_to_process}' 不存在。将创建一个1分钟的静音文件用于演示。")
         AudioSegment.silent(duration=60000).export(audio_file_to_process, format="wav")
