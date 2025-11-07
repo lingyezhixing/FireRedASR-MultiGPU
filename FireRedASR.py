@@ -85,7 +85,9 @@ app = FastAPI(
     description="一个使用 FireRedAsr 模型提供高精度语音识别服务的API。",
     version="1.3.1", # 版本更新，修复Pydantic警告
 )
+# --- 临时目录设置 ---
 TEMP_DIR = "Temp"
+shutil.rmtree(TEMP_DIR, ignore_errors=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 # --- Pydantic模型，用于参数校验 ---
