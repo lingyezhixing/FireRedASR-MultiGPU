@@ -65,7 +65,7 @@ ffmpeg -i input_audio -ar 16000 -ac 1 -acodec pcm_s16le -f wav output.wav
 from fireredasr.models.fireredasr import FireRedAsr
 
 all_wav_paths = [
-    r"audio_split_output_vad\gaowanying_chunk_0001.wav",
+    r"audio.wav",
 ]
 
 # FireRedASR-AED
