@@ -2,12 +2,14 @@ import requests
 import os
 import json
 import time
+import base64
 
 # --- 配置 ---
-API_URL = "http://127.0.0.1:8000"
-TRANScribe_URL = API_URL + "/transcribe/FireRedASR"
+API_URL = "http://127.0.0.1:8080"
+# 更新为新的、兼容OpenAI风格的端点
+TRANScribe_URL = API_URL + "/v1/audio/transcriptions" 
 HEALTH_URL = API_URL + "/health"
-AUDIO_FILE_PATH = r"audio.wav"
+AUDIO_FILE_PATH = r"audio.wav" # 请确保这个文件存在
 
 def print_test_header(title):
     """打印一个漂亮的测试标题头"""
@@ -19,14 +21,18 @@ def handle_response(response):
     """统一处理和打印API响应"""
     try:
         if response.status_code == 200:
-            print("✅ 请求成功 (状态码: 200)")
+            print(f"✅ 请求成功 (状态码: {response.status_code})")
             pretty_json = json.dumps(response.json(), indent=2, ensure_ascii=False)
             print("服务器返回结果:")
             print(pretty_json)
         else:
             print(f"❌ 请求失败 (状态码: {response.status_code})")
             print("服务器返回错误详情:")
-            print(response.text)
+            # 尝试解析JSON错误体
+            try:
+                print(json.dumps(response.json(), indent=2, ensure_ascii=False))
+            except json.JSONDecodeError:
+                print(response.text)
     except requests.exceptions.JSONDecodeError:
         print("❌ 解析响应失败，服务器可能返回了非JSON格式的内容。")
         print("原始响应内容:", response.text)
@@ -34,115 +40,114 @@ def handle_response(response):
 def wait_for_server():
     """等待服务器上线，每秒检测一次健康状态"""
     print("🔍 正在等待服务器启动...")
-    while True:
+    for _ in range(30): # 最多等待30秒
         try:
-            response = requests.get(HEALTH_URL, timeout=5)
+            response = requests.get(HEALTH_URL, timeout=1)
             if response.status_code == 200:
                 print("✅ 服务器已成功启动并响应健康检查！")
                 return True
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             pass
-        print("⏳ 服务器尚未启动，等待1秒后重试...")
         time.sleep(1)
+    print("❌ 服务器启动超时！")
+    return False
 
-def test_1_single_file_upload_llm():
-    """测试1: 上传单个文件，使用默认的LLM模型配置"""
-    print_test_header("上传单个文件 (LLM, 默认参数)")
+def get_audio_as_base64(file_path):
+    """读取音频文件并返回其Base64编码的字符串"""
+    with open(file_path, 'rb') as audio_file:
+        return base64.b64encode(audio_file.read()).decode('utf-8')
+
+def test_1_single_file_default_llm():
+    """测试1: 上传单个文件，使用默认的LLM模型"""
+    print_test_header("上传单个文件 (使用默认模型: FireRedASR-LLM-L)")
     
-    with open(AUDIO_FILE_PATH, 'rb') as f:
-        files = {'files': (os.path.basename(AUDIO_FILE_PATH), f, 'audio/wav')}
-        print(f"准备上传文件: {AUDIO_FILE_PATH}")
-        print("使用参数: 默认LLM配置")
-        
-        response = requests.post(TRANScribe_URL, files=files)
-        handle_response(response)
+    audio_b64 = get_audio_as_base64(AUDIO_FILE_PATH)
+    
+    payload = {
+        "model": "FireRedASR-LLM-L",
+        "audio_files": [
+            {
+                "file_name": os.path.basename(AUDIO_FILE_PATH),
+                "audio_data": audio_b64
+            }
+        ],
+        "stream": False # 显式传递固定参数
+    }
+    
+    print(f"准备上传文件: {AUDIO_FILE_PATH}")
+    print("使用参数: (服务器默认)")
+    response = requests.post(TRANScribe_URL, json=payload)
+    handle_response(response)
 
-def test_2_single_file_upload_aed_custom():
+def test_2_single_file_aed_custom():
     """测试2: 上传单个文件，切换到AED模型并传入自定义参数"""
-    print_test_header("上传单个文件 (AED, 自定义参数)")
+    print_test_header("上传单个文件 (指定模型: FireRedASR-AED-L, 自定义参数)")
     
-    with open(AUDIO_FILE_PATH, 'rb') as f:
-        files = {'files': (os.path.basename(AUDIO_FILE_PATH), f, 'audio/wav')}
-        
-        payload = {
-            'asr_type': 'aed',
-            'beam_size': 5,
-            'aed_length_penalty': 0.8,
-            'softmax_smoothing': 1.1,
-            'batch_size': 4
-        }
-        
-        print(f"准备上传文件: {AUDIO_FILE_PATH}")
-        print(f"使用参数: {json.dumps(payload)}")
-        response = requests.post(TRANScribe_URL, files=files, data=payload)
-        handle_response(response)
+    audio_b64 = get_audio_as_base64(AUDIO_FILE_PATH)
 
-def test_3_multiple_file_upload_batch():
+    payload = {
+        "model": "FireRedASR-AED-L",
+        "audio_files": [
+            {
+                "file_name": os.path.basename(AUDIO_FILE_PATH),
+                "audio_data": audio_b64
+            }
+        ],
+        "beam_size": 5,
+        "aed_length_penalty": 0.8,
+        "softmax_smoothing": 1.1,
+        "batch_size": 4,
+        "stream": False
+    }
+
+    print(f"准备上传文件: {AUDIO_FILE_PATH}")
+    print(f"使用参数: {json.dumps({k: v for k, v in payload.items() if k != 'audio_files'})}")
+    response = requests.post(TRANScribe_URL, json=payload)
+    handle_response(response)
+
+def test_3_multiple_files_batch():
     """测试3: 一次性上传多个文件(使用同一个文件模拟)，测试批处理"""
-    print_test_header("上传多个文件 (AED, 批处理)")
+    print_test_header("上传多个文件 (批处理, 模型: FireRedASR-LLM-L)")
     
-    files_list = [
-        ('files', (f"copy1_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy2_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy3_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy4_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy5_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy6_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy7_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy8_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy9_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-        ('files', (f"copy10_{os.path.basename(AUDIO_FILE_PATH)}", open(AUDIO_FILE_PATH, 'rb'), 'audio/wav')),
-    ]
+    audio_b64 = get_audio_as_base64(AUDIO_FILE_PATH)
     
-    payload = { 
-        'asr_type': 'aed',
-        'batch_size': 4
-        }
-    
-    print(f"准备上传 {len(files_list)} 个文件 (使用同一文件模拟)")
-    print(f"使用参数: {json.dumps(payload)}")
-    response = requests.post(TRANScribe_URL, files=files_list, data=payload)
-    
-    for _, (name, f, mime) in files_list: 
-        f.close()
-        
+    payload = {
+        "model": "FireRedASR-LLM-L",
+        "audio_files": [
+            {"file_name": f"copy_{i+1}.wav", "audio_data": audio_b64} for i in range(5)
+        ],
+        "batch_size": 1, # 内部处理批次大小
+        "stream": False
+    }
+
+    print(f"准备上传 {len(payload['audio_files'])} 个文件 (使用同一文件模拟)")
+    print(f"使用参数: {json.dumps({k: v for k, v in payload.items() if k != 'audio_files'})}")
+    response = requests.post(TRANScribe_URL, json=payload)
     handle_response(response)
 
-def test_4_server_path_single():
-    """测试4: 通过服务器上的绝对路径指定单个文件"""
-    print_test_header("指定服务器路径 (单个文件)")
-    payload = { 'paths': AUDIO_FILE_PATH }
-    
-    print(f"指定服务器上的文件路径: {AUDIO_FILE_PATH}")
-    print(f"使用参数: {json.dumps(payload)}")
-    response = requests.post(TRANScribe_URL, data=payload)
-    handle_response(response)
+def test_4_validation_error():
+    """测试4: 发送一个缺少必要字段的请求，测试服务器的校验逻辑"""
+    print_test_header("测试校验逻辑 (发送无效请求)")
 
-def test_5_server_path_multiple():
-    """测试5: 通过服务器上的绝对路径指定多个文件"""
-    print_test_header("指定服务器路径 (多个文件)")
-    multiple_paths = f"{AUDIO_FILE_PATH},{AUDIO_FILE_PATH}"
-    payload = { 'paths': multiple_paths, 'batch_size': 1 }
-    print(f"指定服务器上的多个文件路径: {multiple_paths}")
-    print(f"使用参数: {json.dumps(payload)}")
-    response = requests.post(TRANScribe_URL, data=payload)
-    handle_response(response)
+    payload = {
+        "model": "FireRedASR-LLM-L",
+        # "audio_files" 字段被故意省略
+        "stream": False
+    }
+    
+    print("发送一个缺少 'audio_files' 字段的请求...")
+    response = requests.post(TRANScribe_URL, json=payload)
+    handle_response(response) # 预期应返回 422 Unprocessable Entity
 
 if __name__ == "__main__":
     if not os.path.exists(AUDIO_FILE_PATH):
         print(f"错误: 测试音频文件未找到，请检查路径配置！\n当前配置的路径是: {AUDIO_FILE_PATH}")
     else:
-        try:
-            # 等待服务器启动
-            wait_for_server()
-            
+        if wait_for_server():
             # 执行所有测试
-            test_1_single_file_upload_llm()
-            test_2_single_file_upload_aed_custom()
-            test_3_multiple_file_upload_batch()
-            test_4_server_path_single()
-            test_5_server_path_multiple()
+            test_1_single_file_default_llm()
+            test_2_single_file_aed_custom()
+            test_3_multiple_files_batch()
+            test_4_validation_error()
             
             print("\n" + "*"*30 + " 所有测试已执行完毕 " + "*"*30)
-        except requests.exceptions.ConnectionError:
-            print(f"\n❌ 连接错误: 无法连接到API服务器。\n请确保您的FastAPI服务正在 {API_URL} 上运行。")
