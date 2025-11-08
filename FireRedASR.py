@@ -4,11 +4,12 @@ import threading
 import tempfile
 import shutil
 from typing import List, Optional, Dict, Any
-from enum import Enum # <--- 新增: 导入Enum
+from enum import Enum
 import torch
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field, ValidationError
+
 # 从您的项目中导入核心ASR类
 from fireredasr.models.fireredasr import FireRedAsr
 
@@ -18,7 +19,7 @@ MODEL_PATHS = {
     "llm": "pretrained_models/FireRedASR-LLM-L"
 }
 
-# <--- 新增: 使用标准的Enum类型来定义可选值 ---
+# --- 使用标准的Enum类型来定义可选值 ---
 class AsrType(str, Enum):
     aed = "aed"
     llm = "llm"
@@ -59,6 +60,7 @@ class ModelManager:
         with self._lock:
             current_config_str = str(sorted(self._config.items())) if self._config else None
             requested_config_str = str(sorted(requested_config.items()))
+
             if self._model is not None and current_config_str == requested_config_str:
                 print("复用具有相同配置的缓存模型。")
                 return self._model
@@ -83,8 +85,9 @@ transcription_lock = threading.Lock()
 app = FastAPI(
     title="FireRedASR API 服务",
     description="一个使用 FireRedAsr 模型提供高精度语音识别服务的API。",
-    version="1.3.1", # 版本更新，修复Pydantic警告
+    version="1.4.0", # 版本更新，改进缓存机制
 )
+
 # --- 临时目录设置 ---
 TEMP_DIR = "Temp"
 shutil.rmtree(TEMP_DIR, ignore_errors=True)
@@ -92,7 +95,6 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 # --- Pydantic模型，用于参数校验 ---
 class ASRParams(BaseModel):
-    # <--- 修改: 使用Enum类型并移除Field中的enum参数 ---
     asr_type: AsrType = Field(AsrType.llm, description="要使用的ASR模型类型。")
     asr_device: str = Field("cuda:0", description="ASR编码器部分所使用的设备。")
     llm_device: str = Field("cuda:1", description="LLM部分所使用的设备 (仅当 asr_type='llm' 时有效)。")
@@ -119,7 +121,6 @@ def health_check():
 # --- API 端点定义 ---
 @app.post("/transcribe/FireRedASR", summary="转录音频文件或路径 (队列处理)")
 def transcribe_audio(
-    # <--- 修改: 更新Form参数的类型提示 ---
     asr_type: AsrType = Form(AsrType.llm, description="要使用的ASR模型类型。"),
     asr_device: str = Form("cuda:0", description="ASR编码器部分所使用的设备。"),
     llm_device: str = Form("cuda:1", description="LLM部分所使用的设备 (仅当 asr_type='llm' 时有效)。"),
@@ -160,27 +161,35 @@ def transcribe_audio(
         
         if not files and not paths:
             raise HTTPException(status_code=400, detail="必须提供 'files' (文件上传) 或 'paths' (服务器路径) 两者之一。")
+
         wav_paths_to_process = []
-        temp_files_to_delete = []
-        is_temp_file = True
+        # <--- 新增: 为每个请求创建一个唯一的临时子目录 ---
+        request_temp_dir: Optional[str] = None
+
         try:
             if files:
-                is_temp_file = True
+                # <--- 修改: 在Temp下创建唯一子文件夹 ---
+                request_temp_dir = tempfile.mkdtemp(dir=TEMP_DIR)
+                print(f"为当前请求创建了临时文件夹: {request_temp_dir}")
                 for file in files:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}", dir=TEMP_DIR) as tmp:
-                        shutil.copyfileobj(file.file, tmp)
-                        wav_paths_to_process.append(tmp.name)
-                        temp_files_to_delete.append(tmp.name)
+                    # <--- 修改: 保持原始文件名，存入子文件夹 ---
+                    file_path = os.path.join(request_temp_dir, file.filename)
+                    with open(file_path, "wb") as buffer:
+                        shutil.copyfileobj(file.file, buffer)
+                    wav_paths_to_process.append(file_path)
+
             elif paths:
-                is_temp_file = False
                 wav_paths_to_process.extend([p.strip() for p in paths.split(',')])
+
             if not wav_paths_to_process:
                 raise HTTPException(status_code=400, detail="请求中未找到有效的音频文件或路径。")
-            model_dir = MODEL_PATHS.get(params.asr_type.value) # 使用 .value 获取枚举的字符串值
+
+            model_dir = MODEL_PATHS.get(params.asr_type.value)
             if not model_dir:
                 raise HTTPException(status_code=400, detail=f"服务器未配置asr_type为'{params.asr_type.value}'的模型路径。")
             if not os.path.isdir(model_dir):
                  raise HTTPException(status_code=500, detail=f"服务器错误：为'{params.asr_type.value}'配置的模型路径'{model_dir}'不存在。")
+
             model_load_config = {
                 "asr_type": params.asr_type,
                 "model_dir": model_dir,
@@ -190,20 +199,19 @@ def transcribe_audio(
                 "use_flash_attn": params.use_flash_attn,
             }
             model = model_manager.get_model(model_load_config)
+            
             transcribe_config = params.model_dump(exclude={"asr_type", "asr_device", "llm_device", "llm_dtype", "use_flash_attn"})
+            
             results = model.transcribe(
                 all_wav_paths=wav_paths_to_process, **transcribe_config
             )
             return results
+            
         finally:
-            if is_temp_file and temp_files_to_delete:
-                print(f"正在清理 {len(temp_files_to_delete)} 个临时文件...")
-                for path in temp_files_to_delete:
-                    try: os.remove(path)
-                    except OSError as e: print(f"移除临时音频文件 {path} 时出错: {e}")
-                    txt_path = os.path.splitext(path)[0] + ".txt"
-                    try: os.remove(txt_path)
-                    except OSError as e: print(f"移除临时txt文件 {txt_path} 时出错: {e}")
+            # <--- 修改: 清理整个请求的临时子文件夹 ---
+            if request_temp_dir:
+                print(f"正在清理请求的临时文件夹: {request_temp_dir}...")
+                shutil.rmtree(request_temp_dir, ignore_errors=True)
             
             print("当前请求处理完毕，释放资源锁，队列中的下一个请求将开始处理。")
 
