@@ -88,7 +88,7 @@ transcription_lock = threading.Lock()
 app = FastAPI(
     title="兼容平台的 FireRedASR API 服务",
     description="一个适配大模型管理平台的、使用 FireRedAsr 提供语音识别服务的API。",
-    version="2.0.0",
+    version="2.1.0", # 版本号更新
 )
 
 # --- 临时目录设置 ---
@@ -114,7 +114,8 @@ class ASRRequest(BaseModel):
     use_flash_attn: bool = Field(False, description="是否为LLM启用 Flash Attention 2。")
     
     # --- 通用解码参数 ---
-    batch_size: int = Field(1, ge=1, description="模型推理的内部批处理大小，用于控制显存使用。")
+    # MODIFICATION 1: 将 batch_size 改为可选参数，默认值为 None
+    batch_size: Optional[int] = Field(None, ge=1, description="模型推理的内部批处理大小。若不传入，AED模型默认为4，LLM模型默认为1。")
     beam_size: int = Field(3, ge=1, description="解码时使用的束搜索大小 (Beam Size)。")
     decode_max_len: int = Field(0, description="解码生成的最大长度，0表示不限制。")
     
@@ -193,6 +194,18 @@ def transcribe_audio(request: ASRRequest = Body(...)):
             transcribe_config = request.model_dump(
                 exclude={"model", "audio_files", "asr_device", "llm_device", "llm_dtype", "use_flash_attn", "stream"}
             )
+            
+            # MODIFICATION 2: 添加动态设置 batch_size 的逻辑
+            if transcribe_config['batch_size'] is None:
+                print("请求中未指定 'batch_size'，将根据模型类型设置默认值。")
+                if internal_asr_type == 'aed':
+                    transcribe_config['batch_size'] = 4
+                    print("模型类型为 AED，设置 batch_size = 4。")
+                else:  # internal_asr_type == 'llm'
+                    transcribe_config['batch_size'] = 1
+                    print("模型类型为 LLM，设置 batch_size = 1。")
+            else:
+                print(f"请求中指定了 'batch_size' = {transcribe_config['batch_size']}，使用该值。")
             
             # --- 执行转录 ---
             results = model.transcribe(
